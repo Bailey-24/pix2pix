@@ -21,9 +21,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
+
+t1 = time.time()
 parser = argparse.ArgumentParser()
-parser.add_argument("--epoch", type=int, default=0, help="epoch to start training from")
-parser.add_argument("--n_epochs", type=int, default=200, help="number of epochs of training")
+parser.add_argument("--epoch", type=int, default=1, help="epoch to start training from")
+parser.add_argument("--n_epochs", type=int, default=400, help="number of epochs of training")
 parser.add_argument("--dataset_name", type=str, default="facades", help="name of the dataset")
 parser.add_argument("--batch_size", type=int, default=1, help="size of the batches")
 parser.add_argument("--lr", type=float, default=0.0002, help="adam: learning rate")
@@ -37,13 +39,13 @@ parser.add_argument("--channels", type=int, default=3, help="number of image cha
 parser.add_argument(
     "--sample_interval", type=int, default=500, help="interval between sampling of images from generators"
 )
-parser.add_argument("--checkpoint_interval", type=int, default=50, help="interval between model checkpoints")
+parser.add_argument("--checkpoint_interval", type=int, default=1, help="interval between model checkpoints")
 # parser.add_argument("--checkpoint_interval", type=int, default=-1, help="interval between model checkpoints")
 opt = parser.parse_args()
 print(opt)
 
-os.makedirs("images/%s" % opt.dataset_name, exist_ok=True)
-os.makedirs("saved_models/%s" % opt.dataset_name, exist_ok=True)
+# os.makedirs("./images/%s" % opt.dataset_name, exist_ok=True)
+# os.makedirs("./saved_models/%s" % opt.dataset_name, exist_ok=True)
 
 cuda = True if torch.cuda.is_available() else False
 
@@ -55,7 +57,9 @@ criterion_pixelwise = torch.nn.L1Loss()
 lambda_pixel = 100
 
 # Calculate output of image discriminator (PatchGAN)
-patch = (1, opt.img_height // (2 ** 4), opt.img_width // (2 ** 4))  #  (1, 16, 16)
+# patch = (1, 70, 70)  #  (1, 16, 16)
+patch = (1, 16, 16)  #  (1, 16, 16)
+# patch = (1, opt.img_height // (2 ** 4), opt.img_width // (2 ** 4))  #  (1, 16, 16)
 
 # Initialize generator and discriminator
 generator = GeneratorUNet()
@@ -67,14 +71,14 @@ if cuda:
     criterion_GAN.cuda()
     criterion_pixelwise.cuda()
 
-if opt.epoch != 0:
+# if opt.epoch != 0:
     # Load pretrained models
-    generator.load_state_dict(torch.load("saved_models/%s/generator_%d.pth" % (opt.dataset_name, opt.epoch)))
-    discriminator.load_state_dict(torch.load("saved_models/%s/discriminator_%d.pth" % (opt.dataset_name, opt.epoch)))
-else:
+    # generator.load_state_dict(torch.load("saved_models/%s/generator_%d.pth" % (opt.dataset_name, opt.epoch)))
+    # discriminator.load_state_dict(torch.load("saved_models/%s/discriminator_%d.pth" % (opt.dataset_name, opt.epoch)))
+# else:
     # Initialize weights
-    generator.apply(weights_init_normal)
-    discriminator.apply(weights_init_normal)
+generator.apply(weights_init_normal)
+discriminator.apply(weights_init_normal)
 
 # Optimizers
 optimizer_G = torch.optim.Adam(generator.parameters(), lr=opt.lr, betas=(opt.b1, opt.b2))
@@ -121,41 +125,22 @@ def sample_images(batches_done):
 
 prev_time = time.time()
 
-for epoch in range(opt.epoch, opt.n_epochs):
+for epoch in range(opt.epoch, opt.n_epochs+1):
     for i, batch in enumerate(dataloader):
 
         # Model inputs
-        real_A = Variable(batch["B"].type(Tensor))
-        real_B = Variable(batch["A"].type(Tensor))
+        real_A = Variable(batch["B"].type(Tensor)) # conditional image
+        real_B = Variable(batch["A"].type(Tensor)) # original image
 
         # Adversarial ground truths
         valid = Variable(Tensor(np.ones((real_A.size(0), *patch))), requires_grad=False)
         fake = Variable(Tensor(np.zeros((real_A.size(0), *patch))), requires_grad=False)
 
-        # ------------------
-        #  Train Generators
-        # ------------------
-
-        optimizer_G.zero_grad()
-
-        # GAN loss
-        fake_B = generator(real_A)
-        pred_fake = discriminator(fake_B, real_A)
-        loss_GAN = criterion_GAN(pred_fake, valid)
-        # Pixel-wise loss
-        loss_pixel = criterion_pixelwise(fake_B, real_B)
-
-        # Total loss
-        loss_G = loss_GAN + lambda_pixel * loss_pixel
-
-        loss_G.backward()
-
-        optimizer_G.step()
-
         # ---------------------
         #  Train Discriminator
         # ---------------------
-
+        fake_B = generator(real_A) # generated image # add
+        ####
         optimizer_D.zero_grad()
 
         # Real loss
@@ -172,6 +157,28 @@ for epoch in range(opt.epoch, opt.n_epochs):
         loss_D.backward()
         optimizer_D.step()
 
+        # ------------------
+        #  Train Generators
+        # ------------------
+
+        optimizer_G.zero_grad()
+
+        # GAN loss
+        # fake_B = generator(real_A) # generated image
+        pred_fake = discriminator(fake_B, real_A)
+        loss_GAN = criterion_GAN(pred_fake, valid)
+        # Pixel-wise loss
+        loss_pixel = criterion_pixelwise(fake_B, real_B)
+
+        # Total loss
+        loss_G = loss_GAN + lambda_pixel * loss_pixel
+
+        loss_G.backward()
+
+        optimizer_G.step()
+
+        
+
         # --------------
         #  Log Progress
         # --------------
@@ -187,7 +194,7 @@ for epoch in range(opt.epoch, opt.n_epochs):
             "\r[Epoch %d/%d] [Batch %d/%d] [D loss: %f] [G loss: %f, pixel: %f, adv: %f] ETA: %s"
             % (
                 epoch,
-                opt.n_epochs,
+                opt.n_epochs+1,
                 i,
                 len(dataloader),
                 loss_D.item(),
@@ -201,14 +208,18 @@ for epoch in range(opt.epoch, opt.n_epochs):
         # If at sample interval save image
         if batches_done % opt.sample_interval == 0:
             sample_images(batches_done)
+        
+        t2 = time.time()
+        print("Total training time: %.2f seconds" % (t2-t1))  
 
-    if epoch % 50 == 0:
+    if opt.checkpoint_interval != -1 and epoch % opt.checkpoint_interval == 0:
         # Save model checkpoints
-        torch.save(generator.state_dict(), "saved_models/%s/generator_%d.pth" % (opt.dataset_name, epoch))
-        torch.save(discriminator.state_dict(), "saved_models/%s/discriminator_%d.pth" % (opt.dataset_name, epoch))
+        torch.save(generator, "./saved_models/%s/generator_last.pth" % (opt.dataset_name))
+        torch.save(discriminator, "./saved_models/%s/discriminator_last.pth" % (opt.dataset_name))
         
         
-    
+
+
     # ------------
     # Run example
     # bash data.sh facades
